@@ -1,6 +1,69 @@
-$global:here = Split-Path -Parent $MyInvocation.MyCommand.Path
+param([switch]$ConfigDriveCleanup)
+
 $ErrorActionPreference = "Stop"
 
+if ($ConfigDriveCleanup) {
+    Describe "ConfigDrive cleanup" {
+        It "removes the temporary copy of a read-only ConfigDrive" {
+            $resources = Split-Path -Parent $PSScriptRoot
+            $config = Join-Path $resources "configdrive-cleanup/cloudbase-init.conf"
+            $cloudbaseInit = (Get-Command cloudbase-init.exe -ErrorAction Stop).Source
+            $iso = Join-Path $TestDrive "configdrive.iso"
+            $source = Join-Path $TestDrive "source"
+            $temp = Join-Path $TestDrive "cloudbase-init-temp"
+            $metadataPath = "openstack/latest/meta_data.json"
+            $instanceId = [guid]::NewGuid().ToString()
+            $metadata = New-Item -ItemType Directory -Path (Join-Path $source "openstack/latest")
+            @{ uuid = $instanceId } | ConvertTo-Json |
+                Set-Content -Path (Join-Path $metadata.FullName "meta_data.json") -Encoding Ascii
+            New-Item -ItemType Directory -Path $temp | Out-Null
+
+            & "$resources/bin/mkisofs.exe" -o $iso -quiet -J -r -V "config-2" $source
+            if ($LASTEXITCODE -ne 0) {
+                throw "mkisofs failed with exit code $LASTEXITCODE"
+            }
+
+            $previousTemp = $env:TEMP
+            $previousTmp = $env:TMP
+            $image = $null
+            try {
+                $image = Mount-DiskImage -ImagePath $iso -PassThru
+                $volume = $image | Get-Volume
+                $volume.DriveLetter | Should -Not -BeNullOrEmpty
+                $volume.FileSystem | Should -Be "CDFS"
+                $isoMetadata = Join-Path "$($volume.DriveLetter):\" $metadataPath
+                (Get-Item -LiteralPath $isoMetadata).IsReadOnly | Should -BeTrue
+
+                $env:TEMP = $temp
+                $env:TMP = $temp
+                $output = & $cloudbaseInit --noreset_service_password --config-file $config
+                $exitCode = $LASTEXITCODE
+                $log = $output -join "`n"
+                $exitCode | Should -Be 0 -Because $log
+                $log | Should -Match "Instance id: $instanceId" -Because $log
+                $log | Should -Match "Plugins execution done" -Because $log
+
+                # The debug log uses Python repr(), which doubles path separators.
+                # Match this copy only, since the CLI also creates other temporary data.
+                $logTemp = [regex]::Escape($temp.Replace('\', '\\'))
+                $copy = [regex]::Match($log, ('Metadata copied to folder: [''"]{0}\\\\(?<name>[\w-]+)[''"]' -f $logTemp))
+                $copy.Success | Should -BeTrue -Because $log
+                $copiedPath = Join-Path $temp $copy.Groups["name"].Value
+                Test-Path -LiteralPath $copiedPath | Should -BeFalse `
+                    -Because "Cloudbase-Init should remove the copied ConfigDrive tree at $copiedPath"
+            } finally {
+                $env:TEMP = $previousTemp
+                $env:TMP = $previousTmp
+                if ($image) {
+                    Dismount-DiskImage -ImagePath $iso | Out-Null
+                }
+            }
+        }
+    }
+    return
+}
+
+$global:here = Split-Path -Parent $MyInvocation.MyCommand.Path
 Import-Module "${here}/ini.psm1"
 
 $REG_KEY_WOW_FOLDER = "WOW6432Node\"

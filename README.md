@@ -47,6 +47,21 @@ if ($errors -or !$pluginExecution) {
 Invoke-Pester test-resources/functional-tests -Output Detailed -FullNameFilter TestVerifyAfterAllPlugins
 ```
 
+### ConfigDrive cleanup
+
+On Windows with Pester 5 and `cloudbase-init.exe` on `PATH`, run the focused
+test from the test-resources repository root:
+
+```powershell
+$test = New-PesterContainer -Path ./functional-tests/CloudbaseInit.Tests.ps1 `
+    -Data @{ ConfigDriveCleanup = $true }
+Invoke-Pester -Container $test -Output Detailed -CI
+```
+
+The test mounts an ISO containing synthetic OpenStack metadata, runs
+Cloudbase-Init with plugins disabled, and checks that its temporary ConfigDrive
+copy is removed. The test dismounts its ISO when it finishes.
+
 ### Oracle Cloud IMDSv2
 
 The `oracle` fixture runs a local metadata server on `127.0.0.1:18080` and
