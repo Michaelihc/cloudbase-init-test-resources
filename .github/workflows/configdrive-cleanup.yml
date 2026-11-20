@@ -1,0 +1,47 @@
+name: ConfigDrive cleanup regression
+
+on:
+  push:
+    branches: [ci/configdrive-cleanup]
+
+permissions:
+  contents: read
+
+jobs:
+  windows-configdrive-cleanup:
+    name: Windows ConfigDrive cleanup
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out test resources
+        uses: actions/checkout@v4
+
+      - name: Check out upstream Cloudbase-Init
+        uses: actions/checkout@v4
+        with:
+          repository: cloudbase/cloudbase-init
+          ref: 4d665ca79b240ff841db824b09f6c11c899c1ed2
+          path: cloudbase-init
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.15'
+          architecture: x64
+
+      - name: Install Cloudbase-Init
+        shell: cmd
+        working-directory: cloudbase-init
+        run: |
+          python -W ignore -m pip install --upgrade pip
+          python -W ignore -m pip install -c upper-constraints.txt -U --force-reinstall -r requirements.txt
+          python -W ignore -m pip install .
+
+      - name: Run ConfigDrive cleanup regression
+        shell: powershell
+        run: |
+          Install-Module -Name Pester -RequiredVersion 5.7.1 -Force -AllowClobber -Confirm:$false -SkipPublisherCheck
+          Import-Module Pester -RequiredVersion 5.7.1
+          $test = New-PesterContainer -Path ./functional-tests/CloudbaseInit.Tests.ps1 `
+            -Data @{ ConfigDriveCleanup = $true }
+          Invoke-Pester -Container $test -Output Detailed -CI
